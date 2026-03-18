@@ -424,7 +424,14 @@ with st.sidebar:
     st.markdown("---")
     run_btn = st.button("⟳  Scan Now", use_container_width=True, type="primary")
 
-is_long = "Long" in mode
+# Mode can be set by sidebar radio OR toggle buttons
+if "mode" not in st.session_state:
+    st.session_state["mode"] = "long" if "Long" in mode else "short"
+elif "Long" in mode:
+    st.session_state["mode"] = "long"
+elif "Short" in mode:
+    st.session_state["mode"] = "short"
+is_long = st.session_state.get("mode", "long") == "long"
 
 # ── Run scan ──
 scan_placeholder = st.empty()
@@ -473,6 +480,19 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# ── Mode toggle buttons on main page ──
+col1, col2, col3 = st.columns([1, 1, 6])
+with col1:
+    if st.button("▲ Long Signals", type="primary" if is_long else "secondary",
+                 use_container_width=True):
+        st.session_state["mode"] = "long"
+        st.rerun()
+with col2:
+    if st.button("▼ Short Signals", type="primary" if not is_long else "secondary",
+                 use_container_width=True):
+        st.session_state["mode"] = "short"
+        st.rerun()
+
 # ── Tabs ──
 tab_signals, tab_all, tab_sl = st.tabs([
     f"{'▲ Long' if is_long else '▼ Short'} Signals ({len(hits)})",
@@ -498,12 +518,12 @@ with tab_signals:
 
         # Build display dataframe
         rows = []
-        for s in sorted(hits, key=lambda x: x["rsi"], reverse=is_long):
+        for s in sorted(hits, key=lambda x: x["rsi"], reverse=is_long):  # Long: high RSI first; Short: low RSI first
             rows.append({
                 "Symbol":   s["sym"],
                 "Price ₹":  f"₹ {s['price']:,.2f}",
                 "Chg %":    f"{'+' if s['chg']>=0 else ''}{s['chg']:.2f}%",
-                "RSI(14)":  s["rsi"],
+                "RSI(14)":  f'{s["rsi"]:.1f}',
                 "VWAP":     f"{s['vwap']:.2f}",
                 f"EMA(33)": f"{s[ema_k]:.2f}",
                 "Volume":   fmt_vol(s["vol"]),
@@ -559,7 +579,7 @@ with tab_all:
             "Symbol":  s["sym"],
             "Price ₹": f"₹ {s['price']:,.2f}",
             "Chg %":   f"{'+' if s['chg']>=0 else ''}{s['chg']:.2f}%",
-            "RSI(14)": s["rsi"],
+            "RSI(14)": f'{s["rsi"]:.1f}',
             "VWAP":    f"{s['vwap']:.2f}",
             "EMA H":   f"{s['emah']:.2f}",
             "EMA L":   f"{s['emal']:.2f}",
