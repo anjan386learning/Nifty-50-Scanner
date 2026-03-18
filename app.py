@@ -259,23 +259,44 @@ def sl_hunt_analyse(sym, sig, df, rsi_s):
 # ═══════════════════════════════════════════════════════════════
 @st.cache_data(ttl=30, show_spinner=False)
 def run_scan():
-    """Cache only the signal data (price/RSI/VWAP/EMA). SL Hunt runs separately."""
-    signals = []
-    raw     = {}   # sym -> (sig, df, rsi_s) for SL hunt
+    """Cache signal data only (price/RSI/VWAP/EMA). Returns signals + list of qualifying syms."""
+    signals      = []
+    sl_syms_long  = []
+    sl_syms_short = []
     for sym in NIFTY50:
-        sig, df, rsi_s = evaluate(sym)
+        sig, _df, _rsi = evaluate(sym)
         if sig:
             signals.append(sig)
-            if sig.get("long_pass") or sig.get("short_pass"):
-                raw[sym] = (sig, df, rsi_s)
-    return signals, raw
+            if sig.get("long_pass"):
+                sl_syms_long.append(sym)
+            elif sig.get("short_pass"):
+                sl_syms_short.append(sym)
+    return signals, sl_syms_long, sl_syms_short
 
 
-def run_sl_hunt(raw: dict) -> list:
-    """Run SL Hunt fresh on every render so timestamps and candle data are current."""
+def run_sl_hunt(sl_syms_long: list, sl_syms_short: list) -> list:
+    """
+    Fetch FRESH 1-min data for every qualifying symbol and run SL Hunt.
+    Completely bypasses the cache so timestamps and candle data are always live.
+    """
     sl_alerts = []
-    for sym, (sig, df, rsi_s) in raw.items():
-        sl_alerts.extend(sl_hunt_analyse(sym, sig, df, rsi_s))
+    all_syms = [(sym, "LONG") for sym in sl_syms_long] + \
+               [(sym, "SHORT") for sym in sl_syms_short]
+    for sym, direction in all_syms:
+        try:
+            df1 = fetch_ohlcv(sym)
+            if df1.empty:
+                continue
+            df = resample(df1)
+            if len(df) < RSI_PERIOD + 5:
+                continue
+            rsi_s = calc_rsi(df["close"])
+            # Build a minimal sig just for direction
+            fake_sig = {"long_pass": direction == "LONG",
+                        "short_pass": direction == "SHORT"}
+            sl_alerts.extend(sl_hunt_analyse(sym, fake_sig, df, rsi_s))
+        except Exception:
+            continue
     return sl_alerts
 
 
@@ -441,8 +462,11 @@ is_long = st.session_state["is_long"]
 
 # ── Run scan ──
 with st.spinner("🔄 Scanning all 50 Nifty stocks…"):
-    signals, _raw = run_scan()
-    sl_alerts = run_sl_hunt(_raw)   # always fresh — not cached
+    signals, _sl_syms_long, _sl_syms_short = run_scan()
+
+# SL Hunt — always fresh, fetches live 1-min data independently
+with st.spinner("⚡ Running SL Hunt on qualifying stocks…"):
+    sl_alerts = run_sl_hunt(_sl_syms_long, _sl_syms_short)
 
 # ── IST scan time (UTC+5:30) ──
 from datetime import timezone, timedelta
@@ -541,16 +565,20 @@ avg_rsi_short = sum(s["rsi"] for s in short_hits) / len(short_hits) if short_hit
 
 TABLE_CSS = """
 .sig-table { width:100%; border-collapse:collapse; font-size:0.82rem; margin-top:4px; }
-.sig-table th { background:#1a1d2e; color:#e4e8f2; font-weight:700; padding:7px 8px;
-                text-align:center; border-bottom:2px solid #b0b8d0; font-size:0.78rem; }
-.sig-table td { padding:6px 8px; text-align:center; border-bottom:1px solid #e4e8f2; }
-.sig-table tr:nth-child(even) td { background:rgba(0,0,0,0.03); }
-.long-tbl tr:hover td { background:#c8f0e0; }
-.short-tbl tr:hover td { background:#fcd4db; }
-.sl-tbl th { background:#7a4000; color:#fff3e0; }
-.sl-tbl td { font-size:0.78rem; }
-.sl-tbl tr.sl-high td { background:#ffe0b2; color:#b00020; font-weight:600; }
-.sl-tbl tr.sl-med  td { background:#fff3e0; color:#7a4000; }
+.sig-table th { background:#2c3150; color:#ffffff; font-weight:700; padding:7px 8px;
+                text-align:center; border-bottom:2px solid #5a6080; font-size:0.78rem; }
+.sig-table td { padding:6px 8px; text-align:center; border-bottom:1px solid #d0d5e8;
+                color:#1a1d2e; }
+.sig-table tr:nth-child(even) td { background:#e8ecf5; }
+.sig-table tr:nth-child(odd)  td { background:#f5f7fc; }
+.long-tbl  tr:hover td { background:#a8e6c8 !important; }
+.short-tbl tr:hover td { background:#f5b0bc !important; }
+/* SL Hunt table header — dark amber */
+.sl-tbl th { background:#5a2d00; color:#ffffff; }
+/* HIGH row — deep red band, white text */
+.sl-tbl tr.sl-high td { background:#b00020 !important; color:#ffffff !important; font-weight:700; }
+/* MED row — deep amber band, white text */
+.sl-tbl tr.sl-med  td { background:#8a4e00 !important; color:#ffffff !important; font-weight:600; }
 .section-hdr {
     border-radius:8px; padding:10px 16px; margin-bottom:6px;
     display:flex; align-items:center; justify-content:space-between;
