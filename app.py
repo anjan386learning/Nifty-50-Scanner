@@ -457,7 +457,7 @@ st.markdown(f"""
   </div>
   <div class="metric-card">
     <div class="label">Avg RSI(14)</div>
-    <div class="value">{avg_rsi:.1f if hits else "—"}</div>
+    <div class="value">{f"{avg_rsi:.1f}" if hits else "—"}</div>
     <div class="sub">9-min bars</div>
   </div>
   <div class="metric-card">
