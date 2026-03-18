@@ -144,8 +144,20 @@ def calc_vwap(df: pd.DataFrame) -> pd.Series:
     return (tp * df["volume"]).cumsum() / df["volume"].cumsum()
 
 
-def calc_ema(s: pd.Series) -> pd.Series:
-    return s.ewm(span=EMA_PERIOD, adjust=False).mean()
+def calc_ema_high(df: pd.DataFrame) -> pd.Series:
+    """
+    EMA(33) of the HIGH price of each 9-min candle.
+    Long signal C3: Price ≥ EMA(33 High)  — price at/above the upper EMA band.
+    """
+    return df["high"].ewm(span=EMA_PERIOD, adjust=False).mean()
+
+
+def calc_ema_low(df: pd.DataFrame) -> pd.Series:
+    """
+    EMA(33) of the LOW price of each 9-min candle.
+    Short signal C3: Price ≤ EMA(33 Low)  — price at/below the lower EMA band.
+    """
+    return df["low"].ewm(span=EMA_PERIOD, adjust=False).mean()
 
 
 def fmt_vol(v: int) -> str:
@@ -167,19 +179,23 @@ def evaluate(sym: str):
 
     rsi_s  = calc_rsi(df["close"])
     vwap_s = calc_vwap(df)
-    emah_s = calc_ema(df["high"])
-    emal_s = calc_ema(df["low"])
+    # EMA(33) of the HIGH of each 9-min candle  → Long signal upper band
+    emah_s = calc_ema_high(df)
+    # EMA(33) of the LOW  of each 9-min candle  → Short signal lower band
+    emal_s = calc_ema_low(df)
 
     price  = float(df["close"].iloc[-1])
     rsi_v  = float(rsi_s.iloc[-1])
     vwap_v = float(vwap_s.iloc[-1])
-    emah_v = float(emah_s.iloc[-1])
-    emal_v = float(emal_s.iloc[-1])
+    emah_v = float(emah_s.iloc[-1])   # EMA(33 High) — latest 9-min bar
+    emal_v = float(emal_s.iloc[-1])   # EMA(33 Low)  — latest 9-min bar
     prev   = float(df["close"].iloc[-2]) if len(df) > 1 else price
     chg    = (price - prev) / prev * 100
     vol    = int(df["volume"].iloc[-1])
 
+    # Long  C3: Price ≥ EMA(33) of 9-min High  (price above upper EMA band)
     lc1 = rsi_v >= 55;  lc2 = price > vwap_v;  lc3 = price >= emah_v
+    # Short C3: Price ≤ EMA(33) of 9-min Low   (price below lower EMA band)
     sc1 = rsi_v <= 45;  sc2 = price < vwap_v;  sc3 = price <= emal_v
 
     sig = dict(
@@ -317,6 +333,10 @@ def evaluate_with_sl_hunt(sym: str):
     Single fetch — returns (sig, df_resampled, rsi_series).
     Mirrors evaluate_with_sl_hunt() from desktop app exactly.
     One yfinance call covers both signal evaluation and SL Hunt data.
+
+    EMA logic:
+      emah = EMA(33) of the HIGH of each 9-min candle  → Long  C3: price ≥ emah
+      emal = EMA(33) of the LOW  of each 9-min candle  → Short C3: price ≤ emal
     """
     df1 = fetch_ohlcv(sym)
     if df1.empty or len(df1) < RSI_PERIOD * INTERVAL_MIN:
@@ -327,19 +347,23 @@ def evaluate_with_sl_hunt(sym: str):
 
     rsi_s  = calc_rsi(df["close"])
     vwap_s = calc_vwap(df)
-    emah_s = calc_ema(df["high"])
-    emal_s = calc_ema(df["low"])
+    # EMA(33) of the HIGH of each 9-min candle  → Long signal upper band
+    emah_s = calc_ema_high(df)
+    # EMA(33) of the LOW  of each 9-min candle  → Short signal lower band
+    emal_s = calc_ema_low(df)
 
     price  = float(df["close"].iloc[-1])
     rsi_v  = float(rsi_s.iloc[-1])
     vwap_v = float(vwap_s.iloc[-1])
-    emah_v = float(emah_s.iloc[-1])
-    emal_v = float(emal_s.iloc[-1])
+    emah_v = float(emah_s.iloc[-1])   # EMA(33 High) — latest 9-min bar
+    emal_v = float(emal_s.iloc[-1])   # EMA(33 Low)  — latest 9-min bar
     prev   = float(df["close"].iloc[-2]) if len(df) > 1 else price
     chg    = (price - prev) / prev * 100
     vol    = int(df["volume"].iloc[-1])
 
+    # Long  C3: Price ≥ EMA(33) of 9-min High  (price above upper EMA band)
     lc1 = rsi_v >= 55;  lc2 = price > vwap_v;  lc3 = price >= emah_v
+    # Short C3: Price ≤ EMA(33) of 9-min Low   (price below lower EMA band)
     sc1 = rsi_v <= 45;  sc2 = price < vwap_v;  sc3 = price <= emal_v
 
     sig = dict(sym=sym, price=round(price,2), chg=round(chg,2),
@@ -530,7 +554,7 @@ st.markdown("""
   <div style="font-size:2.2rem">⬡</div>
   <div>
     <h1>Nifty 50 Signal Scanner</h1>
-    <p>9-min OHLCV &nbsp;·&nbsp; RSI(14) &nbsp;·&nbsp; Session VWAP &nbsp;·&nbsp; EMA(33 High/Low) &nbsp;·&nbsp; SL Hunt Detector &nbsp;·&nbsp; NSE India via yfinance</p>
+    <p>9-min OHLCV &nbsp;·&nbsp; RSI(14) &nbsp;·&nbsp; Session VWAP &nbsp;·&nbsp; EMA(33) of 9-min High/Low &nbsp;·&nbsp; SL Hunt Detector &nbsp;·&nbsp; NSE India via yfinance</p>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -541,9 +565,9 @@ with st.sidebar:
     auto_refresh = st.toggle("Auto-refresh (30s)", value=True)
     st.markdown("---")
     st.markdown("**Long criteria**")
-    st.markdown("- RSI(14) ≥ 55\n- Price > VWAP\n- Price ≥ EMA(33) High")
+    st.markdown("- RSI(14) ≥ 55\n- Price > VWAP\n- Price ≥ EMA(33) of 9-min High")
     st.markdown("**Short criteria**")
-    st.markdown("- RSI(14) ≤ 45\n- Price < VWAP\n- Price ≤ EMA(33) Low")
+    st.markdown("- RSI(14) ≤ 45\n- Price < VWAP\n- Price ≤ EMA(33) of 9-min Low")
     st.markdown("---")
     st.markdown("**SL Hunt thresholds**")
     st.markdown(f"- Wick ratio: {SL_WICK_RATIO:.0%}\n- Vol spike: {SL_VOL_SPIKE_MULT}×\n- RSI diverge: {SL_RSI_DIVERGE} pts")
@@ -629,7 +653,10 @@ st.markdown(f"""
 def signal_table_html(hits, mode_long):
     """Build rows for inline HTML table."""
     if not hits: return ""
-    ema_k = "emah" if mode_long else "emal"
+    # For Long:  show emah (EMA of 9-min High) — the active C3 reference
+    # For Short: show emal (EMA of 9-min Low)  — the active C3 reference
+    ema_k   = "emah" if mode_long else "emal"
+    ema_hdr = "EMA(33)H" if mode_long else "EMA(33)L"
     c1k   = "lc1"  if mode_long else "sc1"
     c2k   = "lc2"  if mode_long else "sc2"
     c3k   = "lc3"  if mode_long else "sc3"
@@ -653,7 +680,8 @@ def signal_table_html(hits, mode_long):
           <td style="color:#0a7c4e;font-weight:700">{c2}</td>
           <td style="color:#0a7c4e;font-weight:700">{c3}</td>
         </tr>"""
-    return rows
+    # Return rows + ema_hdr so the caller can use the correct column label
+    return rows, ema_hdr
 
 def sl_hunt_rows_for(hits_syms, sl_alerts):
     """Return SL hunt alerts for symbols in the given hit list."""
@@ -746,16 +774,17 @@ with col_l:
       </div>
     </div>
     <div style="color:#3a3f5c;font-size:0.75rem;margin-bottom:6px">
-      RSI(14) ≥ 55 &nbsp;·&nbsp; Price &gt; VWAP &nbsp;·&nbsp; Price ≥ EMA(33) High
+      RSI(14) ≥ 55 &nbsp;·&nbsp; Price &gt; VWAP &nbsp;·&nbsp;
+      Price ≥ EMA(33) of 9-min High
     </div>""", unsafe_allow_html=True)
 
     if long_hits:
         with st.expander(f"▲ Show Long signals table ({len(long_hits)} stocks)", expanded=True):
-            long_rows = signal_table_html(long_hits, True)
+            long_rows, long_ema_hdr = signal_table_html(long_hits, True)
             st.markdown(f"""
             <table class="sig-table long-tbl">
               <thead><tr><th>Symbol</th><th>Price ₹</th><th>Chg%</th><th>RSI</th>
-              <th>VWAP</th><th>EMA(33)</th><th>Vol</th>
+              <th>VWAP</th><th>{long_ema_hdr}</th><th>Vol</th>
               <th>C1</th><th>C2</th><th>C3</th></tr></thead>
               <tbody>{long_rows}</tbody>
             </table>""", unsafe_allow_html=True)
@@ -789,16 +818,17 @@ with col_r:
       </div>
     </div>
     <div style="color:#3a3f5c;font-size:0.75rem;margin-bottom:6px">
-      RSI(14) ≤ 45 &nbsp;·&nbsp; Price &lt; VWAP &nbsp;·&nbsp; Price ≤ EMA(33) Low
+      RSI(14) ≤ 45 &nbsp;·&nbsp; Price &lt; VWAP &nbsp;·&nbsp;
+      Price ≤ EMA(33) of 9-min Low
     </div>""", unsafe_allow_html=True)
 
     if short_hits:
         with st.expander(f"▼ Show Short signals table ({len(short_hits)} stocks)", expanded=True):
-            short_rows = signal_table_html(short_hits, False)
+            short_rows, short_ema_hdr = signal_table_html(short_hits, False)
             st.markdown(f"""
             <table class="sig-table short-tbl">
               <thead><tr><th>Symbol</th><th>Price ₹</th><th>Chg%</th><th>RSI</th>
-              <th>VWAP</th><th>EMA(33)</th><th>Vol</th>
+              <th>VWAP</th><th>{short_ema_hdr}</th><th>Vol</th>
               <th>C1</th><th>C2</th><th>C3</th></tr></thead>
               <tbody>{short_rows}</tbody>
             </table>""", unsafe_allow_html=True)
@@ -832,7 +862,7 @@ st.markdown(f"""
 <div class="footer">
   ⬡ Nifty 50 Signal Scanner &nbsp;·&nbsp;
   Data: yfinance NSE (.NS) &nbsp;·&nbsp;
-  RSI(14) · VWAP · EMA(33) · 9-min OHLCV &nbsp;·&nbsp;
+  RSI(14) · VWAP · EMA(33 of 9-min High) · EMA(33 of 9-min Low) · 9-min OHLCV &nbsp;·&nbsp;
   Last scan: {scan_time}
 </div>
 """, unsafe_allow_html=True)
