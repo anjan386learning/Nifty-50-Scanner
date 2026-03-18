@@ -411,7 +411,6 @@ st.markdown("""
 # ── Sidebar controls ──
 with st.sidebar:
     st.markdown("### ⚙️ Scanner Settings")
-    mode        = st.radio("Signal Mode", ["▲ Long Signals", "▼ Short Signals"], index=0)
     auto_refresh = st.toggle("Auto-refresh (30s)", value=True)
     st.markdown("---")
     st.markdown("**Long criteria**")
@@ -422,33 +421,33 @@ with st.sidebar:
     st.markdown("**SL Hunt thresholds**")
     st.markdown(f"- Wick ratio: {SL_WICK_RATIO:.0%}\n- Vol spike: {SL_VOL_SPIKE_MULT}×\n- RSI diverge: {SL_RSI_DIVERGE} pts")
     st.markdown("---")
-    run_btn = st.button("⟳  Scan Now", use_container_width=True, type="primary")
+    if st.button("⟳  Scan Now", use_container_width=True, type="primary"):
+        st.cache_data.clear()
+        st.rerun()
 
-# Mode can be set by sidebar radio OR toggle buttons
-if "mode" not in st.session_state:
-    st.session_state["mode"] = "long" if "Long" in mode else "short"
-elif "Long" in mode:
-    st.session_state["mode"] = "long"
-elif "Short" in mode:
-    st.session_state["mode"] = "short"
-is_long = st.session_state.get("mode", "long") == "long"
+# ── Mode — stored in session_state, toggled by buttons only ──
+if "is_long" not in st.session_state:
+    st.session_state["is_long"] = True   # default: Long
+is_long = st.session_state["is_long"]
 
 # ── Run scan ──
-scan_placeholder = st.empty()
+with st.spinner("🔄 Scanning all 50 Nifty stocks…"):
+    signals, sl_alerts = run_scan()
 
-with scan_placeholder.container():
-    with st.spinner("🔄 Scanning all 50 Nifty stocks — this takes ~30–60s on first load…"):
-        signals, sl_alerts = run_scan()
-
-scan_placeholder.empty()
+# ── IST scan time (UTC+5:30) ──
+from datetime import timezone, timedelta
+ist = timezone(timedelta(hours=5, minutes=30))
+scan_time = datetime.now(ist).strftime("%H:%M:%S IST")
 
 # ── Metrics ──
-key       = "long_pass" if is_long else "short_pass"
-hits      = [s for s in signals if s.get(key)]
-avg_rsi   = sum(s["rsi"] for s in hits) / len(hits) if hits else 0
-sl_highs  = sum(1 for a in sl_alerts if a["severity"] == "HIGH")
-sl_meds   = len(sl_alerts) - sl_highs
-scan_time = datetime.now().strftime("%H:%M:%S")
+key      = "long_pass" if is_long else "short_pass"
+hits     = [s for s in signals if s.get(key)]
+avg_rsi  = sum(s["rsi"] for s in hits) / len(hits) if hits else 0
+sl_highs = sum(1 for a in sl_alerts if a["severity"] == "HIGH")
+sl_meds  = len(sl_alerts) - sl_highs
+# Count both long and short for display
+long_hits  = [s for s in signals if s.get("long_pass")]
+short_hits = [s for s in signals if s.get("short_pass")]
 
 st.markdown(f"""
 <div class="metric-row">
@@ -458,12 +457,17 @@ st.markdown(f"""
     <div class="sub">Nifty 50 stocks</div>
   </div>
   <div class="metric-card">
-    <div class="label">{"Long" if is_long else "Short"} Signals</div>
-    <div class="value" style="color:{"#0a7c4e" if is_long else "#c0142e"}">{len(hits)}</div>
+    <div class="label">▲ Long Signals</div>
+    <div class="value" style="color:#0a7c4e">{len(long_hits)}</div>
     <div class="sub">qualifying</div>
   </div>
   <div class="metric-card">
-    <div class="label">Avg RSI(14)</div>
+    <div class="label">▼ Short Signals</div>
+    <div class="value" style="color:#c0142e">{len(short_hits)}</div>
+    <div class="sub">qualifying</div>
+  </div>
+  <div class="metric-card">
+    <div class="label">Avg RSI — {"Long" if is_long else "Short"}</div>
     <div class="value">{f"{avg_rsi:.1f}" if hits else "—"}</div>
     <div class="sub">9-min bars</div>
   </div>
@@ -474,23 +478,23 @@ st.markdown(f"""
   </div>
   <div class="metric-card">
     <div class="label">Last Scan</div>
-    <div class="value" style="font-size:1.1rem;padding-top:6px">{scan_time}</div>
-    <div class="sub">IST</div>
+    <div class="value" style="font-size:1rem;padding-top:6px">{scan_time}</div>
+    <div class="sub">&nbsp;</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# ── Mode toggle buttons on main page ──
-col1, col2, col3 = st.columns([1, 1, 6])
+# ── Mode toggle buttons ──
+col1, col2, col3 = st.columns([1.2, 1.2, 5.6])
 with col1:
-    if st.button("▲ Long Signals", type="primary" if is_long else "secondary",
-                 use_container_width=True):
-        st.session_state["mode"] = "long"
+    long_type = "primary" if is_long else "secondary"
+    if st.button(f"▲ Long ({len(long_hits)})", type=long_type, use_container_width=True):
+        st.session_state["is_long"] = True
         st.rerun()
 with col2:
-    if st.button("▼ Short Signals", type="primary" if not is_long else "secondary",
-                 use_container_width=True):
-        st.session_state["mode"] = "short"
+    short_type = "primary" if not is_long else "secondary"
+    if st.button(f"▼ Short ({len(short_hits)})", type=short_type, use_container_width=True):
+        st.session_state["is_long"] = False
         st.rerun()
 
 # ── Tabs ──
@@ -654,12 +658,12 @@ with tab_sl:
 
 # ── Auto-refresh ──
 if auto_refresh:
+    import time
     st.markdown("""
     <div style="text-align:right;color:#9098b0;font-size:0.8rem;margin-top:8px">
-    🔄 Auto-refreshing every 30 seconds
+    🔄 Auto-refreshing every 60 seconds
     </div>""", unsafe_allow_html=True)
-    import time
-    time.sleep(30)
+    time.sleep(60)
     st.cache_data.clear()
     st.rerun()
 
