@@ -259,15 +259,24 @@ def sl_hunt_analyse(sym, sig, df, rsi_s):
 # ═══════════════════════════════════════════════════════════════
 @st.cache_data(ttl=30, show_spinner=False)
 def run_scan():
-    signals    = []
-    sl_alerts  = []
+    """Cache only the signal data (price/RSI/VWAP/EMA). SL Hunt runs separately."""
+    signals = []
+    raw     = {}   # sym -> (sig, df, rsi_s) for SL hunt
     for sym in NIFTY50:
         sig, df, rsi_s = evaluate(sym)
         if sig:
             signals.append(sig)
             if sig.get("long_pass") or sig.get("short_pass"):
-                sl_alerts.extend(sl_hunt_analyse(sym, sig, df, rsi_s))
-    return signals, sl_alerts
+                raw[sym] = (sig, df, rsi_s)
+    return signals, raw
+
+
+def run_sl_hunt(raw: dict) -> list:
+    """Run SL Hunt fresh on every render so timestamps and candle data are current."""
+    sl_alerts = []
+    for sym, (sig, df, rsi_s) in raw.items():
+        sl_alerts.extend(sl_hunt_analyse(sym, sig, df, rsi_s))
+    return sl_alerts
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -432,7 +441,8 @@ is_long = st.session_state["is_long"]
 
 # ── Run scan ──
 with st.spinner("🔄 Scanning all 50 Nifty stocks…"):
-    signals, sl_alerts = run_scan()
+    signals, _raw = run_scan()
+    sl_alerts = run_sl_hunt(_raw)   # always fresh — not cached
 
 # ── IST scan time (UTC+5:30) ──
 from datetime import timezone, timedelta
@@ -680,36 +690,6 @@ with col_r:
     with st.expander(f"⚡ SL Hunt — Short stocks ({len(sl_short)} alerts)", expanded=len(sl_short)>0):
         st.markdown(build_sl_table(sl_short), unsafe_allow_html=True)
 
-# ── All Scanned expander ──
-st.markdown("---")
-with st.expander(f"📋 All Scanned — {len(signals)} stocks (Long + Short + Neutral)", expanded=False):
-    rows_all = []
-    for s in sorted(signals, key=lambda x: x["rsi"], reverse=True):
-        sig_label = "▲ LONG" if s.get("long_pass") else ("▼ SHORT" if s.get("short_pass") else "—")
-        rows_all.append({
-            "Symbol":  s["sym"],
-            "Price ₹": f"₹{s['price']:,.2f}",
-            "Chg %":   f"{'+' if s['chg']>=0 else ''}{s['chg']:.2f}%",
-            "RSI":     f'{s["rsi"]:.1f}',
-            "VWAP":    f"{s['vwap']:.2f}",
-            "EMA H":   f"{s['emah']:.2f}",
-            "EMA L":   f"{s['emal']:.2f}",
-            "Volume":  fmt_vol(s["vol"]),
-            "Signal":  sig_label,
-        })
-    def color_all(row):
-        if row["Signal"] == "▲ LONG":  return ["background-color:#d0f5e8;color:#065c38"] * len(row)
-        if row["Signal"] == "▼ SHORT": return ["background-color:#fde0e5;color:#8f0d20"] * len(row)
-        return [""] * len(row)
-    df_all = pd.DataFrame(rows_all)
-    st.dataframe(
-        df_all.style.apply(color_all, axis=1)
-              .set_table_styles([{"selector":"th","props":[
-                  ("background-color","#1a1d2e"),("color","#e4e8f2"),
-                  ("font-weight","700"),("text-align","center"),("font-size","0.8rem")]}])
-              .set_properties(**{"font-size":"0.83rem","text-align":"center"}),
-        use_container_width=True, hide_index=True,
-        height=min(60 + len(rows_all) * 32, 500))
 
 # ── Auto-refresh ──
 if auto_refresh:
