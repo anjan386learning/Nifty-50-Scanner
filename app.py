@@ -484,103 +484,205 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ════════════════════════════════════════════
-# SIDE-BY-SIDE  Long | Short  tables
-# ════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# LAYOUT — Side-by-side Long / Short with SL Hunt inline
+# ═══════════════════════════════════════════════════════════════
 
-def build_signal_table(hits, mode_long):
-    """Build a styled dataframe for either long or short hits."""
-    if not hits:
-        return None
+def signal_table_html(hits, mode_long):
+    """Build rows for inline HTML table."""
+    if not hits: return ""
     ema_k = "emah" if mode_long else "emal"
     c1k   = "lc1"  if mode_long else "sc1"
     c2k   = "lc2"  if mode_long else "sc2"
     c3k   = "lc3"  if mode_long else "sc3"
-    rows  = []
+    color = "#065c38" if mode_long else "#8f0d20"
+    rows  = ""
     for s in sorted(hits, key=lambda x: x["rsi"], reverse=mode_long):
-        rows.append({
-            "Symbol":  s["sym"],
-            "Price ₹": f"₹{s['price']:,.2f}",
-            "Chg %":   f"{'+' if s['chg']>=0 else ''}{s['chg']:.2f}%",
-            "RSI":     f'{s["rsi"]:.1f}',
-            "VWAP":    f"{s['vwap']:.2f}",
-            "EMA(33)": f"{s[ema_k]:.2f}",
-            "Vol":     fmt_vol(s["vol"]),
-            "C1":      tick(s[c1k]),
-            "C2":      tick(s[c2k]),
-            "C3":      tick(s[c3k]),
-        })
-    df = pd.DataFrame(rows)
-    bg  = "#d0f5e8" if mode_long else "#fde0e5"
-    fg  = "#065c38" if mode_long else "#8f0d20"
-    styled = (df.style
-                .apply(lambda r: [f"background-color:{bg};color:{fg};font-weight:600"] * len(r), axis=1)
-                .set_table_styles([{"selector":"th","props":[
-                    ("background-color","#e4e8f2"),("color","#1a1d2e"),
-                    ("font-weight","700"),("text-align","center"),
-                    ("border","1px solid #b0b8d0"),("font-size","0.8rem")]}])
-                .set_properties(**{"font-size":"0.85rem","text-align":"center"}))
-    return styled, df
+        chg_c = "#0a7c4e" if s["chg"] >= 0 else "#c0142e"
+        chg_s = f"{'+' if s['chg']>=0 else ''}{s['chg']:.2f}%"
+        c1 = "✓" if s[c1k] else "·"
+        c2 = "✓" if s[c2k] else "·"
+        c3 = "✓" if s[c3k] else "·"
+        rows += f"""<tr>
+          <td style="font-weight:700;color:{color}">{s['sym']}</td>
+          <td>₹{s['price']:,.2f}</td>
+          <td style="color:{chg_c};font-weight:600">{chg_s}</td>
+          <td style="font-weight:700">{s['rsi']:.1f}</td>
+          <td>{s['vwap']:.2f}</td>
+          <td>{s[ema_k]:.2f}</td>
+          <td>{fmt_vol(s['vol'])}</td>
+          <td style="color:#0a7c4e;font-weight:700">{c1}</td>
+          <td style="color:#0a7c4e;font-weight:700">{c2}</td>
+          <td style="color:#0a7c4e;font-weight:700">{c3}</td>
+        </tr>"""
+    return rows
 
-# ── Main two-column view ──
-st.markdown("---")
-col_long, col_short = st.columns(2, gap="medium")
+def sl_hunt_rows_for(hits_syms, sl_alerts):
+    """Return SL hunt alerts for symbols in the given hit list."""
+    return [a for a in sl_alerts if a["sym"] in hits_syms]
 
-with col_long:
+long_syms  = {s["sym"] for s in long_hits}
+short_syms = {s["sym"] for s in short_hits}
+sl_long    = sl_hunt_rows_for(long_syms,  sl_alerts)
+sl_short   = sl_hunt_rows_for(short_syms, sl_alerts)
+
+avg_rsi_long  = sum(s["rsi"] for s in long_hits)  / len(long_hits)  if long_hits  else 0
+avg_rsi_short = sum(s["rsi"] for s in short_hits) / len(short_hits) if short_hits else 0
+
+TABLE_CSS = """
+.sig-table { width:100%; border-collapse:collapse; font-size:0.82rem; margin-top:4px; }
+.sig-table th { background:#1a1d2e; color:#e4e8f2; font-weight:700; padding:7px 8px;
+                text-align:center; border-bottom:2px solid #b0b8d0; font-size:0.78rem; }
+.sig-table td { padding:6px 8px; text-align:center; border-bottom:1px solid #e4e8f2; }
+.sig-table tr:nth-child(even) td { background:rgba(0,0,0,0.03); }
+.long-tbl tr:hover td { background:#c8f0e0; }
+.short-tbl tr:hover td { background:#fcd4db; }
+.sl-tbl th { background:#7a4000; color:#fff3e0; }
+.sl-tbl td { font-size:0.78rem; }
+.sl-tbl tr.sl-high td { background:#ffe0b2; color:#b00020; font-weight:600; }
+.sl-tbl tr.sl-med  td { background:#fff3e0; color:#7a4000; }
+.section-hdr {
+    border-radius:8px; padding:10px 16px; margin-bottom:6px;
+    display:flex; align-items:center; justify-content:space-between;
+}
+.stat-pill {
+    display:inline-block; border-radius:6px; padding:3px 10px;
+    font-size:0.75rem; font-weight:700; margin:0 4px;
+}
+.expander-hdr {
+    font-weight:700; font-size:0.85rem; color:#3a3f5c;
+    border-top:1px solid #b0b8d0; padding:8px 0 4px 0; margin-top:10px;
+    cursor:pointer;
+}
+"""
+
+def build_sl_table(alerts):
+    if not alerts: return "<p style='color:#9098b0;font-size:0.82rem;padding:6px 0'>No SL Hunt alerts for this group.</p>"
+    rows = ""
+    for a in reversed(alerts):
+        css     = "sl-high" if a["severity"] == "HIGH" else "sl-med"
+        dir_txt = "▲ LONG" if a["direction"] == "LONG" else "▼ SHORT"
+        rows += f"""<tr class="{css}">
+          <td>{a['ts']}</td><td><b>{a['sym']}</b></td>
+          <td>{dir_txt}</td><td>{a['severity']}</td>
+          <td>{a['pattern']}</td>
+          <td style="text-align:left">{a['detail']}</td></tr>"""
+    return f"""<table class="sig-table sl-tbl">
+      <thead><tr><th>Time</th><th>Symbol</th><th>Dir</th><th>Sev</th>
+      <th>Pattern</th><th>Detail</th></tr></thead>
+      <tbody>{rows}</tbody></table>"""
+
+# ── Refresh button + scan time ──
+rc1, rc2 = st.columns([1, 7])
+with rc1:
+    if st.button("⟳ Refresh Now", type="primary", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+with rc2:
     st.markdown(f"""
-    <div style="background:#d0f5e8;border:1px solid #0a7c4e;border-radius:8px;
-                padding:10px 16px;margin-bottom:10px;display:flex;
-                align-items:center;justify-content:space-between">
-      <span style="color:#065c38;font-weight:700;font-size:1rem">▲ LONG SIGNALS</span>
-      <span style="background:#0a7c4e;color:#fff;border-radius:20px;
-                   padding:2px 12px;font-weight:700;font-size:0.9rem">{len(long_hits)}</span>
+    <div style="padding:8px 0;color:#6b718e;font-size:0.85rem">
+      Last scan: <strong style="color:#1a1d2e">{scan_time}</strong>
+      &nbsp;·&nbsp; Auto-refresh: every 60s
+      &nbsp;·&nbsp; 🟢 Long avg RSI: <strong style="color:#065c38">{avg_rsi_long:.1f}</strong>
+      &nbsp;·&nbsp; 🔴 Short avg RSI: <strong style="color:#c0142e">{avg_rsi_short:.1f}</strong>
+      &nbsp;·&nbsp; ⚡ SL Alerts: <strong style="color:#b07800">{len(sl_alerts)}</strong>
+      ({sl_highs} HIGH / {sl_meds} MED)
+    </div>""", unsafe_allow_html=True)
+
+st.markdown(f"<style>{TABLE_CSS}</style>", unsafe_allow_html=True)
+st.markdown("<div style='margin-top:8px'></div>", unsafe_allow_html=True)
+
+# ── Side-by-side columns ──
+col_l, col_r = st.columns(2, gap="medium")
+
+# ──────────────────── LEFT: LONG ────────────────────
+with col_l:
+    # Header
+    st.markdown(f"""
+    <div class="section-hdr" style="background:#d0f5e8;border:2px solid #0a7c4e">
+      <span style="color:#065c38;font-weight:800;font-size:1rem">▲ LONG SIGNALS</span>
+      <div>
+        <span class="stat-pill" style="background:#0a7c4e;color:#fff">{len(long_hits)} stocks</span>
+        <span class="stat-pill" style="background:#c8f0e0;color:#065c38">Avg RSI {avg_rsi_long:.1f}</span>
+      </div>
     </div>
-    <div style="color:#3a3f5c;font-size:0.78rem;margin-bottom:8px">
-      RSI ≥ 55 &nbsp;·&nbsp; Price &gt; VWAP &nbsp;·&nbsp; Price ≥ EMA(33) High
-    </div>
-    """, unsafe_allow_html=True)
+    <div style="color:#3a3f5c;font-size:0.75rem;margin-bottom:6px">
+      RSI(14) ≥ 55 &nbsp;·&nbsp; Price &gt; VWAP &nbsp;·&nbsp; Price ≥ EMA(33) High
+    </div>""", unsafe_allow_html=True)
+
     if long_hits:
-        result = build_signal_table(long_hits, True)
-        if result:
-            styled_l, df_l = result
-            st.dataframe(styled_l, use_container_width=True, hide_index=True,
-                         height=min(55 + len(long_hits) * 33, 520))
-            st.download_button("⬇ Long CSV", df_l.to_csv(index=False),
-                               file_name=f"long_{scan_time.replace(' ','_').replace(':','')}.csv",
+        with st.expander(f"▲ Show Long signals table ({len(long_hits)} stocks)", expanded=True):
+            long_rows = signal_table_html(long_hits, True)
+            st.markdown(f"""
+            <table class="sig-table long-tbl">
+              <thead><tr><th>Symbol</th><th>Price ₹</th><th>Chg%</th><th>RSI</th>
+              <th>VWAP</th><th>EMA(33)</th><th>Vol</th>
+              <th>C1</th><th>C2</th><th>C3</th></tr></thead>
+              <tbody>{long_rows}</tbody>
+            </table>""", unsafe_allow_html=True)
+            # CSV download
+            rows_l = []
+            for s in sorted(long_hits, key=lambda x: x["rsi"], reverse=True):
+                rows_l.append({"Symbol":s["sym"],"Price":s["price"],"Chg%":s["chg"],
+                               "RSI":s["rsi"],"VWAP":s["vwap"],"EMA_H":s["emah"],
+                               "Volume":s["vol"],"C1_RSI":s["lc1"],"C2_VWAP":s["lc2"],"C3_EMA":s["lc3"]})
+            st.download_button("⬇ Long CSV", pd.DataFrame(rows_l).to_csv(index=False),
+                               file_name=f"long_{scan_time[:8].replace(':','')}.csv",
                                mime="text/csv", key="dl_long")
     else:
-        st.markdown("""<div class="warn-banner">No Long signals this cycle.</div>""",
-                    unsafe_allow_html=True)
+        st.markdown("""<div style="background:#fff3e0;border:1px solid #bf6000;border-radius:6px;
+                       padding:10px 14px;color:#7a4000;font-size:0.85rem">
+                       No Long signals this cycle.</div>""", unsafe_allow_html=True)
 
-with col_short:
+    # ⚡ SL Hunt for Long
+    with st.expander(f"⚡ SL Hunt — Long stocks ({len(sl_long)} alerts)", expanded=len(sl_long)>0):
+        st.markdown(build_sl_table(sl_long), unsafe_allow_html=True)
+
+# ──────────────────── RIGHT: SHORT ────────────────────
+with col_r:
+    # Header
     st.markdown(f"""
-    <div style="background:#fde0e5;border:1px solid #c0142e;border-radius:8px;
-                padding:10px 16px;margin-bottom:10px;display:flex;
-                align-items:center;justify-content:space-between">
-      <span style="color:#8f0d20;font-weight:700;font-size:1rem">▼ SHORT SIGNALS</span>
-      <span style="background:#c0142e;color:#fff;border-radius:20px;
-                   padding:2px 12px;font-weight:700;font-size:0.9rem">{len(short_hits)}</span>
+    <div class="section-hdr" style="background:#fde0e5;border:2px solid #c0142e">
+      <span style="color:#8f0d20;font-weight:800;font-size:1rem">▼ SHORT SIGNALS</span>
+      <div>
+        <span class="stat-pill" style="background:#c0142e;color:#fff">{len(short_hits)} stocks</span>
+        <span class="stat-pill" style="background:#fcd4db;color:#8f0d20">Avg RSI {avg_rsi_short:.1f}</span>
+      </div>
     </div>
-    <div style="color:#3a3f5c;font-size:0.78rem;margin-bottom:8px">
-      RSI ≤ 45 &nbsp;·&nbsp; Price &lt; VWAP &nbsp;·&nbsp; Price ≤ EMA(33) Low
-    </div>
-    """, unsafe_allow_html=True)
+    <div style="color:#3a3f5c;font-size:0.75rem;margin-bottom:6px">
+      RSI(14) ≤ 45 &nbsp;·&nbsp; Price &lt; VWAP &nbsp;·&nbsp; Price ≤ EMA(33) Low
+    </div>""", unsafe_allow_html=True)
+
     if short_hits:
-        result = build_signal_table(short_hits, False)
-        if result:
-            styled_s, df_s = result
-            st.dataframe(styled_s, use_container_width=True, hide_index=True,
-                         height=min(55 + len(short_hits) * 33, 520))
-            st.download_button("⬇ Short CSV", df_s.to_csv(index=False),
-                               file_name=f"short_{scan_time.replace(' ','_').replace(':','')}.csv",
+        with st.expander(f"▼ Show Short signals table ({len(short_hits)} stocks)", expanded=True):
+            short_rows = signal_table_html(short_hits, False)
+            st.markdown(f"""
+            <table class="sig-table short-tbl">
+              <thead><tr><th>Symbol</th><th>Price ₹</th><th>Chg%</th><th>RSI</th>
+              <th>VWAP</th><th>EMA(33)</th><th>Vol</th>
+              <th>C1</th><th>C2</th><th>C3</th></tr></thead>
+              <tbody>{short_rows}</tbody>
+            </table>""", unsafe_allow_html=True)
+            rows_s = []
+            for s in sorted(short_hits, key=lambda x: x["rsi"]):
+                rows_s.append({"Symbol":s["sym"],"Price":s["price"],"Chg%":s["chg"],
+                               "RSI":s["rsi"],"VWAP":s["vwap"],"EMA_L":s["emal"],
+                               "Volume":s["vol"],"C1_RSI":s["sc1"],"C2_VWAP":s["sc2"],"C3_EMA":s["sc3"]})
+            st.download_button("⬇ Short CSV", pd.DataFrame(rows_s).to_csv(index=False),
+                               file_name=f"short_{scan_time[:8].replace(':','')}.csv",
                                mime="text/csv", key="dl_short")
     else:
-        st.markdown("""<div class="warn-banner">No Short signals this cycle.</div>""",
-                    unsafe_allow_html=True)
+        st.markdown("""<div style="background:#fff3e0;border:1px solid #bf6000;border-radius:6px;
+                       padding:10px 14px;color:#7a4000;font-size:0.85rem">
+                       No Short signals this cycle.</div>""", unsafe_allow_html=True)
 
-# ── All Scanned + SL Hunt in expanders below ──
+    # ⚡ SL Hunt for Short
+    with st.expander(f"⚡ SL Hunt — Short stocks ({len(sl_short)} alerts)", expanded=len(sl_short)>0):
+        st.markdown(build_sl_table(sl_short), unsafe_allow_html=True)
+
+# ── All Scanned expander ──
 st.markdown("---")
-with st.expander(f"📋 All Scanned ({len(signals)} stocks)", expanded=False):
+with st.expander(f"📋 All Scanned — {len(signals)} stocks (Long + Short + Neutral)", expanded=False):
     rows_all = []
     for s in sorted(signals, key=lambda x: x["rsi"], reverse=True):
         sig_label = "▲ LONG" if s.get("long_pass") else ("▼ SHORT" if s.get("short_pass") else "—")
@@ -603,47 +705,15 @@ with st.expander(f"📋 All Scanned ({len(signals)} stocks)", expanded=False):
     st.dataframe(
         df_all.style.apply(color_all, axis=1)
               .set_table_styles([{"selector":"th","props":[
-                  ("background-color","#e4e8f2"),("color","#1a1d2e"),
-                  ("font-weight","700"),("text-align","center")]}]),
+                  ("background-color","#1a1d2e"),("color","#e4e8f2"),
+                  ("font-weight","700"),("text-align","center"),("font-size","0.8rem")]}])
+              .set_properties(**{"font-size":"0.83rem","text-align":"center"}),
         use_container_width=True, hide_index=True,
-        height=min(60 + len(rows_all) * 33, 500))
-
-with st.expander(f"⚡ SL Hunt Alerts ({len(sl_alerts)})", expanded=len(sl_alerts) > 0):
-    if not sl_alerts:
-        st.markdown("""<div class="info-banner">✅ No SL Hunt patterns detected this cycle.</div>""",
-                    unsafe_allow_html=True)
-    else:
-        st.markdown(f"""<div class="warn-banner">
-        ⚡ <strong>{len(sl_alerts)} alert(s)</strong> &nbsp;·&nbsp;
-        🔴 <strong>{sl_highs} HIGH</strong> &nbsp;·&nbsp;
-        🟠 <strong>{sl_meds} MED</strong>
-        </div>""", unsafe_allow_html=True)
-        rows_html = ""
-        for a in reversed(sl_alerts):
-            css      = "sl-high" if a["severity"] == "HIGH" else "sl-med"
-            dir_badge= "badge-long" if a["direction"] == "LONG" else "badge-short"
-            dir_text = "▲ LONG" if a["direction"] == "LONG" else "▼ SHORT"
-            sev_badge= "badge-high" if a["severity"] == "HIGH" else "badge-med"
-            rows_html += f"""<tr class="{css}">
-              <td>{a['ts']}</td><td><strong>{a['sym']}</strong></td>
-              <td><span class="badge {dir_badge}">{dir_text}</span></td>
-              <td><span class="badge {sev_badge}">{a['severity']}</span></td>
-              <td>{a['pattern']}</td>
-              <td style="font-size:0.82rem">{a['detail']}</td></tr>"""
-        st.markdown(f"""<table class="sl-table"><thead><tr>
-            <th>Time</th><th>Symbol</th><th>Signal</th><th>Sev</th>
-            <th>Pattern</th><th>Detail</th></tr></thead>
-            <tbody>{rows_html}</tbody></table>""", unsafe_allow_html=True)
-        df_sl = pd.DataFrame(sl_alerts)[["ts","sym","direction","severity","pattern","detail"]]
-        st.download_button("⬇ SL Hunt CSV", df_sl.to_csv(index=False),
-                           file_name=f"sl_hunt_{scan_time.replace(' ','_').replace(':','')}.csv",
-                           mime="text/csv")
+        height=min(60 + len(rows_all) * 32, 500))
 
 # ── Auto-refresh ──
 if auto_refresh:
     import time
-    st.markdown("""<div style="text-align:right;color:#9098b0;font-size:0.78rem;margin-top:8px">
-    🔄 Auto-refreshing every 60 seconds</div>""", unsafe_allow_html=True)
     time.sleep(60)
     st.cache_data.clear()
     st.rerun()
@@ -651,9 +721,9 @@ if auto_refresh:
 # ── Footer ──
 st.markdown(f"""
 <div class="footer">
-  Data: NSE India · yfinance (.NS) &nbsp;|&nbsp;
-  RSI(14) · Session VWAP · EMA(33) &nbsp;|&nbsp;
-  9-min OHLCV &nbsp;|&nbsp;
-  Last scan: {scan_time} &nbsp;|&nbsp; ⬡ Nifty 50 Signal Scanner
+  ⬡ Nifty 50 Signal Scanner &nbsp;·&nbsp;
+  Data: yfinance NSE (.NS) &nbsp;·&nbsp;
+  RSI(14) · VWAP · EMA(33) · 9-min OHLCV &nbsp;·&nbsp;
+  Last scan: {scan_time}
 </div>
 """, unsafe_allow_html=True)
