@@ -484,120 +484,121 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Mode toggle buttons ──
-col1, col2, col3 = st.columns([1.2, 1.2, 5.6])
-with col1:
-    long_type = "primary" if is_long else "secondary"
-    if st.button(f"▲ Long ({len(long_hits)})", type=long_type, use_container_width=True):
-        st.session_state["is_long"] = True
-        st.rerun()
-with col2:
-    short_type = "primary" if not is_long else "secondary"
-    if st.button(f"▼ Short ({len(short_hits)})", type=short_type, use_container_width=True):
-        st.session_state["is_long"] = False
-        st.rerun()
-
-# ── Tabs ──
-tab_signals, tab_all, tab_sl = st.tabs([
-    f"{'▲ Long' if is_long else '▼ Short'} Signals ({len(hits)})",
-    f"All Scanned ({len(signals)})",
-    f"⚡ SL Hunt Alerts ({len(sl_alerts)})",
-])
-
 # ════════════════════════════════════════════
-# TAB 1 — qualifying signals
+# SIDE-BY-SIDE  Long | Short  tables
 # ════════════════════════════════════════════
-with tab_signals:
+
+def build_signal_table(hits, mode_long):
+    """Build a styled dataframe for either long or short hits."""
     if not hits:
-        st.markdown(f"""
-        <div class="warn-banner">
-        No {'Long' if is_long else 'Short'} signals found in this scan cycle.
-        The scanner refreshes every 30 seconds — signals appear when all 3 criteria are met simultaneously.
-        </div>""", unsafe_allow_html=True)
-    else:
-        ema_k = "emah" if is_long else "emal"
-        c1k   = "lc1"  if is_long else "sc1"
-        c2k   = "lc2"  if is_long else "sc2"
-        c3k   = "lc3"  if is_long else "sc3"
+        return None
+    ema_k = "emah" if mode_long else "emal"
+    c1k   = "lc1"  if mode_long else "sc1"
+    c2k   = "lc2"  if mode_long else "sc2"
+    c3k   = "lc3"  if mode_long else "sc3"
+    rows  = []
+    for s in sorted(hits, key=lambda x: x["rsi"], reverse=mode_long):
+        rows.append({
+            "Symbol":  s["sym"],
+            "Price ₹": f"₹{s['price']:,.2f}",
+            "Chg %":   f"{'+' if s['chg']>=0 else ''}{s['chg']:.2f}%",
+            "RSI":     f'{s["rsi"]:.1f}',
+            "VWAP":    f"{s['vwap']:.2f}",
+            "EMA(33)": f"{s[ema_k]:.2f}",
+            "Vol":     fmt_vol(s["vol"]),
+            "C1":      tick(s[c1k]),
+            "C2":      tick(s[c2k]),
+            "C3":      tick(s[c3k]),
+        })
+    df = pd.DataFrame(rows)
+    bg  = "#d0f5e8" if mode_long else "#fde0e5"
+    fg  = "#065c38" if mode_long else "#8f0d20"
+    styled = (df.style
+                .apply(lambda r: [f"background-color:{bg};color:{fg};font-weight:600"] * len(r), axis=1)
+                .set_table_styles([{"selector":"th","props":[
+                    ("background-color","#e4e8f2"),("color","#1a1d2e"),
+                    ("font-weight","700"),("text-align","center"),
+                    ("border","1px solid #b0b8d0"),("font-size","0.8rem")]}])
+                .set_properties(**{"font-size":"0.85rem","text-align":"center"}))
+    return styled, df
 
-        # Build display dataframe
-        rows = []
-        for s in sorted(hits, key=lambda x: x["rsi"], reverse=is_long):  # Long: high RSI first; Short: low RSI first
-            rows.append({
-                "Symbol":   s["sym"],
-                "Price ₹":  f"₹ {s['price']:,.2f}",
-                "Chg %":    f"{'+' if s['chg']>=0 else ''}{s['chg']:.2f}%",
-                "RSI(14)":  f'{s["rsi"]:.1f}',
-                "VWAP":     f"{s['vwap']:.2f}",
-                f"EMA(33)": f"{s[ema_k]:.2f}",
-                "Volume":   fmt_vol(s["vol"]),
-                "C1 RSI":   tick(s[c1k]),
-                "C2 VWAP":  tick(s[c2k]),
-                "C3 EMA":   tick(s[c3k]),
-                "Signal":   "▲ LONG" if is_long else "▼ SHORT",
-            })
+# ── Main two-column view ──
+st.markdown("---")
+col_long, col_short = st.columns(2, gap="medium")
 
-        df_display = pd.DataFrame(rows)
-
-        # Style the dataframe
-        def style_row(row):
-            base = "background-color: #d0f5e8; color: #065c38;" if is_long \
-                   else "background-color: #fde0e5; color: #8f0d20;"
-            return [base] * len(row)
-
-        styled = (df_display.style
-                  .apply(style_row, axis=1)
-                  .set_properties(**{"font-weight": "600", "text-align": "center"})
-                  .set_table_styles([{
-                      "selector": "th",
-                      "props": [("background-color","#e4e8f2"),
-                                ("color","#1a1d2e"),
-                                ("font-weight","700"),
-                                ("text-align","center"),
-                                ("border","1px solid #b0b8d0")]
-                  }]))
-
-        st.dataframe(styled, use_container_width=True, hide_index=True,
-                     height=min(60 + len(rows) * 35, 500))
-
-        # Download button
-        csv = df_display.to_csv(index=False)
-        st.download_button("⬇ Download CSV", csv,
-                           file_name=f"nifty50_{'long' if is_long else 'short'}_{scan_time.replace(':','')}.csv",
-                           mime="text/csv")
-
-# ════════════════════════════════════════════
-# TAB 2 — all scanned
-# ════════════════════════════════════════════
-with tab_all:
+with col_long:
     st.markdown(f"""
-    <div class="info-banner">
-    Showing all {len(signals)} stocks for which data was fetched successfully.
-    Stocks highlighted in green/red qualify for Long/Short signals.
-    </div>""", unsafe_allow_html=True)
+    <div style="background:#d0f5e8;border:1px solid #0a7c4e;border-radius:8px;
+                padding:10px 16px;margin-bottom:10px;display:flex;
+                align-items:center;justify-content:space-between">
+      <span style="color:#065c38;font-weight:700;font-size:1rem">▲ LONG SIGNALS</span>
+      <span style="background:#0a7c4e;color:#fff;border-radius:20px;
+                   padding:2px 12px;font-weight:700;font-size:0.9rem">{len(long_hits)}</span>
+    </div>
+    <div style="color:#3a3f5c;font-size:0.78rem;margin-bottom:8px">
+      RSI ≥ 55 &nbsp;·&nbsp; Price &gt; VWAP &nbsp;·&nbsp; Price ≥ EMA(33) High
+    </div>
+    """, unsafe_allow_html=True)
+    if long_hits:
+        result = build_signal_table(long_hits, True)
+        if result:
+            styled_l, df_l = result
+            st.dataframe(styled_l, use_container_width=True, hide_index=True,
+                         height=min(55 + len(long_hits) * 33, 520))
+            st.download_button("⬇ Long CSV", df_l.to_csv(index=False),
+                               file_name=f"long_{scan_time.replace(' ','_').replace(':','')}.csv",
+                               mime="text/csv", key="dl_long")
+    else:
+        st.markdown("""<div class="warn-banner">No Long signals this cycle.</div>""",
+                    unsafe_allow_html=True)
 
+with col_short:
+    st.markdown(f"""
+    <div style="background:#fde0e5;border:1px solid #c0142e;border-radius:8px;
+                padding:10px 16px;margin-bottom:10px;display:flex;
+                align-items:center;justify-content:space-between">
+      <span style="color:#8f0d20;font-weight:700;font-size:1rem">▼ SHORT SIGNALS</span>
+      <span style="background:#c0142e;color:#fff;border-radius:20px;
+                   padding:2px 12px;font-weight:700;font-size:0.9rem">{len(short_hits)}</span>
+    </div>
+    <div style="color:#3a3f5c;font-size:0.78rem;margin-bottom:8px">
+      RSI ≤ 45 &nbsp;·&nbsp; Price &lt; VWAP &nbsp;·&nbsp; Price ≤ EMA(33) Low
+    </div>
+    """, unsafe_allow_html=True)
+    if short_hits:
+        result = build_signal_table(short_hits, False)
+        if result:
+            styled_s, df_s = result
+            st.dataframe(styled_s, use_container_width=True, hide_index=True,
+                         height=min(55 + len(short_hits) * 33, 520))
+            st.download_button("⬇ Short CSV", df_s.to_csv(index=False),
+                               file_name=f"short_{scan_time.replace(' ','_').replace(':','')}.csv",
+                               mime="text/csv", key="dl_short")
+    else:
+        st.markdown("""<div class="warn-banner">No Short signals this cycle.</div>""",
+                    unsafe_allow_html=True)
+
+# ── All Scanned + SL Hunt in expanders below ──
+st.markdown("---")
+with st.expander(f"📋 All Scanned ({len(signals)} stocks)", expanded=False):
     rows_all = []
     for s in sorted(signals, key=lambda x: x["rsi"], reverse=True):
         sig_label = "▲ LONG" if s.get("long_pass") else ("▼ SHORT" if s.get("short_pass") else "—")
         rows_all.append({
             "Symbol":  s["sym"],
-            "Price ₹": f"₹ {s['price']:,.2f}",
+            "Price ₹": f"₹{s['price']:,.2f}",
             "Chg %":   f"{'+' if s['chg']>=0 else ''}{s['chg']:.2f}%",
-            "RSI(14)": f'{s["rsi"]:.1f}',
+            "RSI":     f'{s["rsi"]:.1f}',
             "VWAP":    f"{s['vwap']:.2f}",
             "EMA H":   f"{s['emah']:.2f}",
             "EMA L":   f"{s['emal']:.2f}",
             "Volume":  fmt_vol(s["vol"]),
             "Signal":  sig_label,
         })
-
     def color_all(row):
-        if row["Signal"] == "▲ LONG":
-            return ["background-color:#d0f5e8;color:#065c38"] * len(row)
-        if row["Signal"] == "▼ SHORT":
-            return ["background-color:#fde0e5;color:#8f0d20"] * len(row)
+        if row["Signal"] == "▲ LONG":  return ["background-color:#d0f5e8;color:#065c38"] * len(row)
+        if row["Signal"] == "▼ SHORT": return ["background-color:#fde0e5;color:#8f0d20"] * len(row)
         return [""] * len(row)
-
     df_all = pd.DataFrame(rows_all)
     st.dataframe(
         df_all.style.apply(color_all, axis=1)
@@ -605,64 +606,44 @@ with tab_all:
                   ("background-color","#e4e8f2"),("color","#1a1d2e"),
                   ("font-weight","700"),("text-align","center")]}]),
         use_container_width=True, hide_index=True,
-        height=min(60 + len(rows_all) * 35, 600)
-    )
+        height=min(60 + len(rows_all) * 33, 500))
 
-# ════════════════════════════════════════════
-# TAB 3 — SL Hunt alerts
-# ════════════════════════════════════════════
-with tab_sl:
+with st.expander(f"⚡ SL Hunt Alerts ({len(sl_alerts)})", expanded=len(sl_alerts) > 0):
     if not sl_alerts:
-        st.markdown("""
-        <div class="info-banner">
-        ✅ No SL Hunt patterns detected in this scan cycle.
-        Alerts appear only for stocks qualifying for Long or Short signals.
-        </div>""", unsafe_allow_html=True)
+        st.markdown("""<div class="info-banner">✅ No SL Hunt patterns detected this cycle.</div>""",
+                    unsafe_allow_html=True)
     else:
-        st.markdown(f"""
-        <div class="warn-banner">
-        ⚡ <strong>{len(sl_alerts)} SL Hunt pattern(s) detected</strong> across qualifying stocks.
-        🔴 <strong>{sl_highs} HIGH</strong> severity &nbsp;·&nbsp; 🟠 <strong>{sl_meds} MED</strong> severity.
-        These are warning signals — confirm with price action before acting.
+        st.markdown(f"""<div class="warn-banner">
+        ⚡ <strong>{len(sl_alerts)} alert(s)</strong> &nbsp;·&nbsp;
+        🔴 <strong>{sl_highs} HIGH</strong> &nbsp;·&nbsp;
+        🟠 <strong>{sl_meds} MED</strong>
         </div>""", unsafe_allow_html=True)
-
-        # Build HTML table
         rows_html = ""
         for a in reversed(sl_alerts):
-            css = "sl-high" if a["severity"] == "HIGH" else "sl-med"
-            dir_badge = "badge-long" if a["direction"] == "LONG" else "badge-short"
-            rows_html += f"""
-            <tr class="{css}">
-              <td>{a['ts']}</td>
-              <td><strong>{a['sym']}</strong></td>
-              <td><span class="badge {dir_badge}">{"▲ LONG" if a['direction']=="LONG" else "▼ SHORT"}</span></td>
-              <td><span class="badge {"badge-high" if a['severity']=="HIGH" else "badge-med"}">{a['severity']}</span></td>
+            css      = "sl-high" if a["severity"] == "HIGH" else "sl-med"
+            dir_badge= "badge-long" if a["direction"] == "LONG" else "badge-short"
+            dir_text = "▲ LONG" if a["direction"] == "LONG" else "▼ SHORT"
+            sev_badge= "badge-high" if a["severity"] == "HIGH" else "badge-med"
+            rows_html += f"""<tr class="{css}">
+              <td>{a['ts']}</td><td><strong>{a['sym']}</strong></td>
+              <td><span class="badge {dir_badge}">{dir_text}</span></td>
+              <td><span class="badge {sev_badge}">{a['severity']}</span></td>
               <td>{a['pattern']}</td>
-              <td style="font-size:0.82rem">{a['detail']}</td>
-            </tr>"""
-
-        st.markdown(f"""
-        <table class="sl-table">
-          <thead><tr>
-            <th>Time</th><th>Symbol</th><th>Signal</th><th>Severity</th>
-            <th>Pattern</th><th>Detail</th>
-          </tr></thead>
-          <tbody>{rows_html}</tbody>
-        </table>""", unsafe_allow_html=True)
-
-        # Download
+              <td style="font-size:0.82rem">{a['detail']}</td></tr>"""
+        st.markdown(f"""<table class="sl-table"><thead><tr>
+            <th>Time</th><th>Symbol</th><th>Signal</th><th>Sev</th>
+            <th>Pattern</th><th>Detail</th></tr></thead>
+            <tbody>{rows_html}</tbody></table>""", unsafe_allow_html=True)
         df_sl = pd.DataFrame(sl_alerts)[["ts","sym","direction","severity","pattern","detail"]]
-        st.download_button("⬇ Download SL Hunt CSV", df_sl.to_csv(index=False),
-                           file_name=f"sl_hunt_{scan_time.replace(':','')}.csv",
+        st.download_button("⬇ SL Hunt CSV", df_sl.to_csv(index=False),
+                           file_name=f"sl_hunt_{scan_time.replace(' ','_').replace(':','')}.csv",
                            mime="text/csv")
 
 # ── Auto-refresh ──
 if auto_refresh:
     import time
-    st.markdown("""
-    <div style="text-align:right;color:#9098b0;font-size:0.8rem;margin-top:8px">
-    🔄 Auto-refreshing every 60 seconds
-    </div>""", unsafe_allow_html=True)
+    st.markdown("""<div style="text-align:right;color:#9098b0;font-size:0.78rem;margin-top:8px">
+    🔄 Auto-refreshing every 60 seconds</div>""", unsafe_allow_html=True)
     time.sleep(60)
     st.cache_data.clear()
     st.rerun()
@@ -671,9 +652,8 @@ if auto_refresh:
 st.markdown(f"""
 <div class="footer">
   Data: NSE India · yfinance (.NS) &nbsp;|&nbsp;
-  Indicators: RSI(14) · Session VWAP · EMA(33) &nbsp;|&nbsp;
-  Intervals: 9-min OHLCV &nbsp;|&nbsp;
-  Last scan: {scan_time} IST &nbsp;|&nbsp;
-  ⬡ Nifty 50 Signal Scanner
+  RSI(14) · Session VWAP · EMA(33) &nbsp;|&nbsp;
+  9-min OHLCV &nbsp;|&nbsp;
+  Last scan: {scan_time} &nbsp;|&nbsp; ⬡ Nifty 50 Signal Scanner
 </div>
 """, unsafe_allow_html=True)
