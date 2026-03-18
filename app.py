@@ -193,78 +193,178 @@ def evaluate(sym: str):
 
 
 # ═══════════════════════════════════════════════════════════════
-# SL HUNT DETECTOR
+# SL HUNT DETECTOR — ported exactly from Nifty50_Desktop-Stock.py
+# All three checks run on the 9-min resampled bars (same as desktop)
+# Timestamp derived from last bar index converted to IST
 # ═══════════════════════════════════════════════════════════════
-def sl_hunt_analyse(sym, sig, df, rsi_s):
+
+def _sl_ts_ist(df_resampled: pd.DataFrame) -> str:
+    """Return HH:MM:SS IST from the last 9-min bar's timestamp — server-tz-safe."""
+    from datetime import timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    ts  = df_resampled.index[-1]
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    return ts.astimezone(ist).strftime("%H:%M:%S")
+
+
+def _check_wick(sym, direction, df, ts):
+    """Wick reversal on the latest completed 9-min bar."""
     alerts = []
-    if df is None or len(df) < 5:
+    latest    = df.iloc[-1]
+    o, h, l, c = latest["open"], latest["high"], latest["low"], latest["close"]
+    bar_range = h - l
+    if bar_range < 0.5:          # ignore micro-range bars
         return alerts
-    direction = "LONG" if sig.get("long_pass") else "SHORT"
-    ts = datetime.now().strftime("%H:%M:%S")
 
-    # ── 1. Wick reversal ──
-    row  = df.iloc[-1]
-    o, h, l, c = row["open"], row["high"], row["low"], row["close"]
-    rng  = h - l
-    if rng >= 0.5:
-        uw = h - max(o, c)
-        lw = min(o, c) - l
-        if direction == "LONG" and uw / rng >= SL_WICK_RATIO:
-            alerts.append(dict(ts=ts, sym=sym, direction=direction,
-                pattern="UPPER WICK REVERSAL",
-                detail=f"Wick {uw:.2f} / Range {rng:.2f} ({uw/rng:.0%})  H:{h:.2f} L:{l:.2f} C:{c:.2f}",
-                severity="HIGH" if uw/rng >= 0.70 else "MED"))
-        if direction == "SHORT" and lw / rng >= SL_WICK_RATIO:
-            alerts.append(dict(ts=ts, sym=sym, direction=direction,
-                pattern="LOWER WICK REVERSAL",
-                detail=f"Wick {lw:.2f} / Range {rng:.2f} ({lw/rng:.0%})  H:{h:.2f} L:{l:.2f} C:{c:.2f}",
-                severity="HIGH" if lw/rng >= 0.70 else "MED"))
+    upper_wick = h - max(o, c)
+    lower_wick = min(o, c) - l
 
-    # ── 2. Volume spike ──
-    if len(df) >= 6:
-        avg_vol   = df["volume"].iloc[-6:-1].mean()
-        vol_ratio = row["volume"] / avg_vol if avg_vol > 0 else 0
-        price_chg = row["close"] - row["open"]
-        if direction == "LONG" and vol_ratio >= SL_VOL_SPIKE_MULT and price_chg < 0:
-            alerts.append(dict(ts=ts, sym=sym, direction=direction,
-                pattern="VOL SPIKE + BEARISH BAR",
-                detail=f"Volume {vol_ratio:.1f}× avg  Close {row['close']:.2f} (Open {row['open']:.2f})  Long SL sweep",
-                severity="HIGH" if vol_ratio >= SL_VOL_SPIKE_MULT * 1.5 else "MED"))
-        if direction == "SHORT" and vol_ratio >= SL_VOL_SPIKE_MULT and price_chg > 0:
-            alerts.append(dict(ts=ts, sym=sym, direction=direction,
-                pattern="VOL SPIKE + BULLISH BAR",
-                detail=f"Volume {vol_ratio:.1f}× avg  Close {row['close']:.2f} (Open {row['open']:.2f})  Short SL sweep",
-                severity="HIGH" if vol_ratio >= SL_VOL_SPIKE_MULT * 1.5 else "MED"))
+    if direction == "LONG" and upper_wick / bar_range >= SL_WICK_RATIO:
+        alerts.append({
+            "ts": ts, "sym": sym, "direction": direction,
+            "pattern": "UPPER WICK REVERSAL",
+            "detail": (f"Upper wick {upper_wick:.2f}  |  Bar range {bar_range:.2f}  "
+                       f"|  Wick/Range {upper_wick/bar_range:.0%}  "
+                       f"|  Bar H:{h:.2f} L:{l:.2f} C:{c:.2f}"),
+            "severity": "HIGH" if upper_wick / bar_range >= 0.70 else "MED",
+        })
 
-    # ── 3. RSI divergence ──
-    if rsi_s is not None and len(rsi_s) >= 4 and len(df) >= 4:
-        prices = df["close"].iloc[-4:].values
-        rsis   = rsi_s.iloc[-4:].values
-        if direction == "LONG" and prices[-1] > prices[-2] and rsis[-1] < rsis[-2] - SL_RSI_DIVERGE:
-            alerts.append(dict(ts=ts, sym=sym, direction=direction,
-                pattern="BEARISH RSI DIVERGENCE",
-                detail=f"Price ↑ {prices[-2]:.2f}→{prices[-1]:.2f}  RSI ↓ {rsis[-2]:.1f}→{rsis[-1]:.1f}  Momentum fading",
-                severity="MED"))
-        if direction == "SHORT" and prices[-1] < prices[-2] and rsis[-1] > rsis[-2] + SL_RSI_DIVERGE:
-            alerts.append(dict(ts=ts, sym=sym, direction=direction,
-                pattern="BULLISH RSI DIVERGENCE",
-                detail=f"Price ↓ {prices[-2]:.2f}→{prices[-1]:.2f}  RSI ↑ {rsis[-2]:.1f}→{rsis[-1]:.1f}  Momentum fading",
-                severity="MED"))
-
+    if direction == "SHORT" and lower_wick / bar_range >= SL_WICK_RATIO:
+        alerts.append({
+            "ts": ts, "sym": sym, "direction": direction,
+            "pattern": "LOWER WICK REVERSAL",
+            "detail": (f"Lower wick {lower_wick:.2f}  |  Bar range {bar_range:.2f}  "
+                       f"|  Wick/Range {lower_wick/bar_range:.0%}  "
+                       f"|  Bar H:{h:.2f} L:{l:.2f} C:{c:.2f}"),
+            "severity": "HIGH" if lower_wick / bar_range >= 0.70 else "MED",
+        })
     return alerts
 
 
+def _check_vol_spike(sym, direction, df, ts):
+    """Volume spike on latest 9-min bar while price moved against the signal."""
+    alerts = []
+    if len(df) < 6:
+        return alerts
+
+    recent_vols = df["volume"].iloc[-6:-1]
+    avg_vol     = recent_vols.mean()
+    if avg_vol <= 0:
+        return alerts
+
+    latest    = df.iloc[-1]
+    vol_ratio = latest["volume"] / avg_vol
+    price_chg = latest["close"] - latest["open"]
+
+    if direction == "LONG" and vol_ratio >= SL_VOL_SPIKE_MULT and price_chg < 0:
+        alerts.append({
+            "ts": ts, "sym": sym, "direction": direction,
+            "pattern": "VOL SPIKE + BEARISH BAR",
+            "detail": (f"Volume {vol_ratio:.1f}× avg  |  "
+                       f"Bar close {latest['close']:.2f} (open {latest['open']:.2f})  |  "
+                       f"Potential long SL sweep"),
+            "severity": "HIGH" if vol_ratio >= SL_VOL_SPIKE_MULT * 1.5 else "MED",
+        })
+
+    if direction == "SHORT" and vol_ratio >= SL_VOL_SPIKE_MULT and price_chg > 0:
+        alerts.append({
+            "ts": ts, "sym": sym, "direction": direction,
+            "pattern": "VOL SPIKE + BULLISH BAR",
+            "detail": (f"Volume {vol_ratio:.1f}× avg  |  "
+                       f"Bar close {latest['close']:.2f} (open {latest['open']:.2f})  |  "
+                       f"Potential short SL sweep"),
+            "severity": "HIGH" if vol_ratio >= SL_VOL_SPIKE_MULT * 1.5 else "MED",
+        })
+    return alerts
+
+
+def _check_rsi_divergence(sym, direction, df, rsi_series, ts):
+    """Bearish/bullish RSI divergence in the last 3 bars — momentum fading."""
+    alerts = []
+    if rsi_series is None or len(rsi_series) < 4 or len(df) < 4:
+        return alerts
+
+    prices = df["close"].iloc[-4:].values
+    rsis   = rsi_series.iloc[-4:].values
+
+    if direction == "LONG":
+        if prices[-1] > prices[-2] and rsis[-1] < rsis[-2] - SL_RSI_DIVERGE:
+            alerts.append({
+                "ts": ts, "sym": sym, "direction": direction,
+                "pattern": "BEARISH RSI DIVERGENCE",
+                "detail": (f"Price ↑ {prices[-2]:.2f}→{prices[-1]:.2f}  |  "
+                           f"RSI ↓ {rsis[-2]:.1f}→{rsis[-1]:.1f}  |  "
+                           f"Momentum fading — SL hunt likely"),
+                "severity": "MED",
+            })
+
+    if direction == "SHORT":
+        if prices[-1] < prices[-2] and rsis[-1] > rsis[-2] + SL_RSI_DIVERGE:
+            alerts.append({
+                "ts": ts, "sym": sym, "direction": direction,
+                "pattern": "BULLISH RSI DIVERGENCE",
+                "detail": (f"Price ↓ {prices[-2]:.2f}→{prices[-1]:.2f}  |  "
+                           f"RSI ↑ {rsis[-2]:.1f}→{rsis[-1]:.1f}  |  "
+                           f"Momentum fading — SL hunt likely"),
+                "severity": "MED",
+            })
+    return alerts
+
+
+def evaluate_with_sl_hunt(sym: str):
+    """
+    Single fetch — returns (sig, df_resampled, rsi_series).
+    Mirrors evaluate_with_sl_hunt() from desktop app exactly.
+    One yfinance call covers both signal evaluation and SL Hunt data.
+    """
+    df1 = fetch_ohlcv(sym)
+    if df1.empty or len(df1) < RSI_PERIOD * INTERVAL_MIN:
+        return None, None, None
+    df = resample(df1)
+    if len(df) < RSI_PERIOD + EMA_PERIOD:
+        return None, None, None
+
+    rsi_s  = calc_rsi(df["close"])
+    vwap_s = calc_vwap(df)
+    emah_s = calc_ema(df["high"])
+    emal_s = calc_ema(df["low"])
+
+    price  = float(df["close"].iloc[-1])
+    rsi_v  = float(rsi_s.iloc[-1])
+    vwap_v = float(vwap_s.iloc[-1])
+    emah_v = float(emah_s.iloc[-1])
+    emal_v = float(emal_s.iloc[-1])
+    prev   = float(df["close"].iloc[-2]) if len(df) > 1 else price
+    chg    = (price - prev) / prev * 100
+    vol    = int(df["volume"].iloc[-1])
+
+    lc1 = rsi_v >= 55;  lc2 = price > vwap_v;  lc3 = price >= emah_v
+    sc1 = rsi_v <= 45;  sc2 = price < vwap_v;  sc3 = price <= emal_v
+
+    sig = dict(sym=sym, price=round(price,2), chg=round(chg,2),
+               rsi=round(rsi_v,1), vwap=round(vwap_v,2),
+               emah=round(emah_v,2), emal=round(emal_v,2), vol=vol,
+               lc1=lc1, lc2=lc2, lc3=lc3, long_pass=lc1 and lc2 and lc3,
+               sc1=sc1, sc2=sc2, sc3=sc3, short_pass=sc1 and sc2 and sc3)
+
+    return sig, df, rsi_s
+
+
 # ═══════════════════════════════════════════════════════════════
-# SCANNING  (cached with TTL so all users share one fetch cycle)
+# SCANNING
 # ═══════════════════════════════════════════════════════════════
 @st.cache_data(ttl=30, show_spinner=False)
 def run_scan():
-    """Cache signal data only (price/RSI/VWAP/EMA). Returns signals + list of qualifying syms."""
-    signals      = []
+    """
+    One yfinance fetch per symbol via evaluate_with_sl_hunt.
+    Caches signals for the price table + qualifying sym lists for SL Hunt.
+    """
+    signals       = []
     sl_syms_long  = []
     sl_syms_short = []
     for sym in NIFTY50:
-        sig, _df, _rsi = evaluate(sym)
+        sig, _df, _rsi = evaluate_with_sl_hunt(sym)
         if sig:
             signals.append(sig)
             if sig.get("long_pass"):
@@ -276,25 +376,22 @@ def run_scan():
 
 def run_sl_hunt(sl_syms_long: list, sl_syms_short: list) -> list:
     """
-    Fetch FRESH 1-min data for every qualifying symbol and run SL Hunt.
-    Completely bypasses the cache so timestamps and candle data are always live.
+    Re-fetch fresh data for qualifying symbols and run all three SL Hunt checks.
+    Not cached — every render gets live 9-min bar data and correct IST timestamp.
+    Mirrors StockSLHuntDetector.analyse_stock() from desktop app exactly.
     """
     sl_alerts = []
-    all_syms = [(sym, "LONG") for sym in sl_syms_long] + \
-               [(sym, "SHORT") for sym in sl_syms_short]
+    all_syms  = [(sym, "LONG")  for sym in sl_syms_long] + \
+                [(sym, "SHORT") for sym in sl_syms_short]
     for sym, direction in all_syms:
         try:
-            df1 = fetch_ohlcv(sym)
-            if df1.empty:
+            sig, df, rsi_s = evaluate_with_sl_hunt(sym)
+            if sig is None or df is None or len(df) < 5:
                 continue
-            df = resample(df1)
-            if len(df) < RSI_PERIOD + 5:
-                continue
-            rsi_s = calc_rsi(df["close"])
-            # Build a minimal sig just for direction
-            fake_sig = {"long_pass": direction == "LONG",
-                        "short_pass": direction == "SHORT"}
-            sl_alerts.extend(sl_hunt_analyse(sym, fake_sig, df, rsi_s))
+            ts = _sl_ts_ist(df)
+            sl_alerts += _check_wick(sym, direction, df, ts)
+            sl_alerts += _check_vol_spike(sym, direction, df, ts)
+            sl_alerts += _check_rsi_divergence(sym, direction, df, rsi_s, ts)
         except Exception:
             continue
     return sl_alerts
@@ -482,6 +579,8 @@ sl_meds  = len(sl_alerts) - sl_highs
 # Count both long and short for display
 long_hits  = [s for s in signals if s.get("long_pass")]
 short_hits = [s for s in signals if s.get("short_pass")]
+avg_rsi_long  = sum(s["rsi"] for s in long_hits)  / len(long_hits)  if long_hits  else 0
+avg_rsi_short = sum(s["rsi"] for s in short_hits) / len(short_hits) if short_hits else 0
 
 st.markdown(f"""
 <div class="metric-row">
@@ -501,8 +600,13 @@ st.markdown(f"""
     <div class="sub">qualifying</div>
   </div>
   <div class="metric-card">
-    <div class="label">Avg RSI — {"Long" if is_long else "Short"}</div>
-    <div class="value">{f"{avg_rsi:.1f}" if hits else "—"}</div>
+    <div class="label">▲ Avg RSI Long</div>
+    <div class="value" style="color:#0a7c4e">{f"{avg_rsi_long:.1f}" if long_hits else "—"}</div>
+    <div class="sub">9-min bars</div>
+  </div>
+  <div class="metric-card">
+    <div class="label">▼ Avg RSI Short</div>
+    <div class="value" style="color:#c0142e">{f"{avg_rsi_short:.1f}" if short_hits else "—"}</div>
     <div class="sub">9-min bars</div>
   </div>
   <div class="metric-card">
@@ -559,9 +663,6 @@ long_syms  = {s["sym"] for s in long_hits}
 short_syms = {s["sym"] for s in short_hits}
 sl_long    = sl_hunt_rows_for(long_syms,  sl_alerts)
 sl_short   = sl_hunt_rows_for(short_syms, sl_alerts)
-
-avg_rsi_long  = sum(s["rsi"] for s in long_hits)  / len(long_hits)  if long_hits  else 0
-avg_rsi_short = sum(s["rsi"] for s in short_hits) / len(short_hits) if short_hits else 0
 
 TABLE_CSS = """
 .sig-table { width:100%; border-collapse:collapse; font-size:0.82rem; margin-top:4px; }
